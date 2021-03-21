@@ -26,7 +26,7 @@ class QipActions {
   /**
    * Initialize (if necessary) actions
    */
-  async init(): Promise<void> {
+  public async init(): Promise<void> {
     if (this.initialized_) {
       return;
     }
@@ -72,7 +72,7 @@ class QipActions {
    * Fetch an IP, cycling through sources enabled by the user until a valid response is found
    * @param version IP version
    */
-  async getIP(version: IpVersionIndex): Promise<string | undefined> {
+  public async getIP(version: IpVersionIndex): Promise<string | undefined> {
     let ids = this.sources_.getOrderedEnabledSourceIds(version);
     if (!ids.length) {
       ids = [this.sources_.getDefaultSourceId(version)];

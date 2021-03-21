@@ -109,7 +109,7 @@ class QipStorage {
    * Get the value of a stored option
    * @param option Option name
    */
-  async getOption(option: string): Promise<any> {
+  public async getOption(option: string): Promise<any> {
     return this.getOptions([option]).then((stg) => stg[option]);
   }
 
