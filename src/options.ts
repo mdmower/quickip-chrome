@@ -12,7 +12,6 @@ import {
   StorageVersionStates,
   getIpVersion,
   getStorageSourceStatesIndex,
-  InternalMessage,
 } from './interfaces';
 import {QipSources} from './sources';
 import {QipStorage} from './storage';
@@ -21,7 +20,9 @@ import {getDefaultStorageData} from './default-sources';
 document.addEventListener(
   'DOMContentLoaded',
   function () {
-    new QipOptions().init();
+    new QipOptions().init().catch((error) => {
+      console.error('Unexpected error during initialization', error);
+    });
   },
   false
 );
@@ -33,54 +34,58 @@ interface ListenerConfig {
 }
 
 class QipOptions {
-  private sources_: QipSources;
+  /**
+   * Storage handler
+   */
   private storage_: QipStorage;
-  private listenerMap_: Array<ListenerConfig>;
+
+  /**
+   * IP sources handler
+   */
+  private sources_: QipSources;
+
+  /**
+   * Collection of options listeners
+   */
+  private listenerMap_: Array<ListenerConfig> = [
+    {
+      selector: '#version-states-container input[name="version_states"]',
+      event: 'change',
+      callback: this.saveOptions.bind(this),
+    },
+    {
+      selector: '#sources-container input[data-id]',
+      event: 'change',
+      callback: this.saveOptions.bind(this),
+    },
+    {
+      selector: '#sources-container .enable-all',
+      event: 'click',
+      callback: this.enableAllSources.bind(this),
+    },
+    {
+      selector: '#keyboard-shortcut-config',
+      event: 'click',
+      callback: this.openShortcutsConfig.bind(this),
+    },
+    {
+      selector: '#restore-defaults',
+      event: 'click',
+      callback: this.restoreDefaults.bind(this),
+    },
+  ];
 
   constructor() {
-    const {sources, storage} = chrome.extension.getBackgroundPage()?.qipBackground || {};
-    if (!sources || !storage) {
-      throw new Error('Background page is missing shared objects');
-    }
-    this.sources_ = sources;
-    this.storage_ = storage;
-
-    /**
-     * Map element selectors to events and callbacks
-     */
-    this.listenerMap_ = [
-      {
-        selector: '#version-states-container input[name="version_states"]',
-        event: 'change',
-        callback: this.saveOptions.bind(this),
-      },
-      {
-        selector: '#sources-container input[data-id]',
-        event: 'change',
-        callback: this.saveOptions.bind(this),
-      },
-      {
-        selector: '#sources-container .enable-all',
-        event: 'click',
-        callback: this.enableAllSources.bind(this),
-      },
-      {
-        selector: '#keyboard-shortcut-config',
-        event: 'click',
-        callback: this.openShortcutsConfig.bind(this),
-      },
-      {
-        selector: '#restore-defaults',
-        event: 'click',
-        callback: this.restoreDefaults.bind(this),
-      },
-    ];
+    this.storage_ = new QipStorage();
+    this.sources_ = new QipSources(this.storage_);
   }
 
   /**
    * Initialize options page
    */
-  init(): void {
+  public async init(): Promise<void> {
+    await this.storage_.init();
+    await this.sources_.init();
     this.initAboutVersion();
     this.initSourceLists();
     this.initVersionOptions();
@@ -91,18 +96,13 @@ class QipOptions {
   /**
    * Start listeners
    */
-  startListeners(): void {
+  private startListeners(): void {
     /**
      * Listen for settings changes
      */
-    chrome.runtime.onMessage.addListener((request: InternalMessage) => {
-      switch (request.cmd) {
-        case 'settings_updated':
-          this.notify('Updated settings are available. Please refresh this page.', true);
-          break;
-        default:
-          break;
-      }
+    this.storage_.addStorageChangeCallback(async () => {
+      this.notify('Updated settings are available. Please refresh this page.', true);
+      return Promise.resolve();
     });
 
     this.toggleListeners(true);
@@ -112,7 +112,7 @@ class QipOptions {
    * Toggle all event listeners on/off (does not handle Sortable update listener)
    * @param enable Whether listeners should be enabled or disabled
    */
-  toggleListeners(enable: boolean): void {
+  private toggleListeners(enable: boolean): void {
     this.listenerMap_.forEach((listenerData) => {
       document.querySelectorAll(listenerData.selector).forEach((elm) => {
         if (enable) {
@@ -127,7 +127,7 @@ class QipOptions {
   /**
    * Create source list from template
    */
-  initSourceLists(): void {
+  private initSourceLists(): void {
     const versions = this.sources_.getVersions();
     versions.forEach((version) => {
       const versionData = this.sources_.getVersionData(version);
@@ -178,7 +178,7 @@ class QipOptions {
    * @param version IP version
    * @param source Source data
    */
-  generateSourceListItem(
+  private generateSourceListItem(
     version: IpVersionIndex,
     source: IndividualSource
   ): DocumentFragment | undefined {
@@ -214,7 +214,7 @@ class QipOptions {
   /**
    * Populate version on About tab
    */
-  initAboutVersion(): void {
+  private initAboutVersion(): void {
     const extensionVersion = document.querySelector<HTMLSpanElement>('#extensionVersion');
     if (extensionVersion) {
       extensionVersion.textContent = chrome.runtime.getManifest().version;
@@ -228,7 +228,7 @@ class QipOptions {
    * @param msg Message for notification
    * @param refresh Whether page refresh is required upon notification confirmation
    */
-  notify(msg: string, refresh?: boolean) {
+  private notify(msg: string, refresh?: boolean) {
     const notifyElement = document.querySelector<HTMLDivElement>('#notify');
     const notifyMsg = notifyElement?.querySelector<HTMLParagraphElement>('.msg');
     const button = notifyElement?.querySelector('button');
@@ -268,7 +268,7 @@ class QipOptions {
   /**
    * Create version selection from template
    */
-  initVersionOptions() {
+  private initVersionOptions() {
     const versions = this.sources_.getVersions();
     versions.forEach((version) => {
       const versionData = this.sources_.getVersionData(version);
@@ -302,7 +302,7 @@ class QipOptions {
   /**
    * Make source lists sortable
    */
-  sortifyList(): void {
+  private sortifyList(): void {
     const sortableLists = document.querySelectorAll<HTMLUListElement>('ul.sortable');
     sortableLists.forEach((list) => {
       new Sortable(list, {
@@ -316,7 +316,7 @@ class QipOptions {
    * Enable all sources for a specific IP version
    * @param event Event that triggered this handler
    */
-  async enableAllSources(event: Event): Promise<void> {
+  private async enableAllSources(event: Event): Promise<void> {
     const target = event.currentTarget as HTMLButtonElement | null;
     if (!target) {
       return;
@@ -335,7 +335,7 @@ class QipOptions {
    * Handle link to extension shortcut options (<a> not allowed)
    * @param event Event that triggered this handler
    */
-  openShortcutsConfig(event: Event): void {
+  private openShortcutsConfig(event: Event): void {
     event.preventDefault();
     chrome.tabs.create({url: 'chrome://extensions/shortcuts'});
   }
@@ -343,7 +343,7 @@ class QipOptions {
   /**
    * Restore all settings to defaults
    */
-  async restoreDefaults(): Promise<void> {
+  private async restoreDefaults(): Promise<void> {
     await this.storage_.clearOptions();
     await this.storage_.setOptions(getDefaultStorageData());
     await this.sources_.applySourceOptions();
@@ -353,7 +353,7 @@ class QipOptions {
   /**
    * Save all options to storage
    */
-  async saveOptions(): Promise<void> {
+  private async saveOptions(): Promise<void> {
     const options = {} as StorageData;
     let errorMessage = '';
 
@@ -435,7 +435,7 @@ class QipOptions {
    * Get the order of sources for a specific IP version from the page
    * @param version IP version
    */
-  getSourceOrder(version: IpVersionIndex): string[] {
+  private getSourceOrder(version: IpVersionIndex): string[] {
     const inputs = document.querySelectorAll<HTMLInputElement>(
       `#sources-container input[data-version="${version}"]`
     );
@@ -446,7 +446,7 @@ class QipOptions {
    * Get the enabled sources for a specific IP version from the page
    * @param version IP version
    */
-  getEnabledSources(version: IpVersionIndex): string[] {
+  private getEnabledSources(version: IpVersionIndex): string[] {
     const inputs = document.querySelectorAll<HTMLInputElement>(
       `#sources-container input[data-version="${version}"]`
     );

@@ -18,8 +18,14 @@
   "ignorePatterns": ["dist/**/*", "webpack.*.js"],
   "rules": {
     "prettier/prettier": ["error"],
-    "no-undef": "error",
     "no-var": "error",
+    "prefer-const": [
+      "error",
+      {
+        "destructuring": "all"
+      }
+    ],
+    "@typescript-eslint/no-inferrable-types": "off",
     "@typescript-eslint/no-explicit-any": "warn",
     "@typescript-eslint/no-unsafe-return": "warn",
     "@typescript-eslint/no-unsafe-assignment": "warn",

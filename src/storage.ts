@@ -2,30 +2,33 @@
  * @license Apache-2.0
  */
 
-import {InternalMessage} from './interfaces';
+/**
+ * Storage handling
+ */
+class QipStorage {
+  /**
+   * Whether the storage change handler is enabled
+   */
+  private changeHandlerEnabled_: boolean = false;
 
-export default class QipStorage {
-  private inited_: boolean;
-  private changeHandlerEnabled_: boolean;
-  // It is not possible to listen for messages in the same (background) context
-  // https://bugs.chromium.org/p/chromium/issues/detail?id=479951
-  // Manually create a hook that gets called on storage updates.
-  public storageChangeSourcesHook: () => Promise<void>;
+  /**
+   * Callback functions to run on storage change events
+   */
+  private storageChangeCallbacks_: (() => Promise<void>)[] = [];
 
-  constructor() {
-    this.inited_ = false;
-    this.changeHandlerEnabled_ = false;
-    this.storageChangeSourcesHook = () => Promise.resolve();
-  }
+  /**
+   * Whether storage has been initialized
+   */
+  private initialized_: boolean = false;
 
   /**
    * Initialize (if necessary) storage
    */
-  async init(): Promise<void> {
-    if (this.inited_) {
+  public async init(): Promise<void> {
+    if (this.initialized_) {
       return;
     }
-    this.inited_ = true;
+    this.initialized_ = true;
 
     chrome.storage.onChanged.addListener(this.storageChangeHandler.bind(this));
     this.toggleChangeHandler(true);
@@ -34,11 +37,33 @@ export default class QipStorage {
   }
 
   /**
+   * Add a callback function to run on storage change events
+   * @param callback Callback function
+   */
+  public addStorageChangeCallback(callback: () => Promise<void>): void {
+    // TODO: Check on 'this' context possibilities. Could a callback
+    // be designed to access private members of this class?
+    this.storageChangeCallbacks_.push(callback);
+  }
+
+  /**
+   * Remove all callback functions from running on storage change events
+   */
+  public clearStorageChangeCallbacks(): void {
+    this.storageChangeCallbacks_ = [];
+  }
+
+  /**
    * Handle storage change events and broadcast notification
    * @param changes StorageChanges from chrome.storage.onChanged
    * @param namespace Chrome storage area
+   *
+   * Note: It is not possible to listen for messages in the same context
+   * (https://bugs.chromium.org/p/chromium/issues/detail?id=479951). So,
+   * storageChangeSourcesHook can be overriden will be called on storage
+   * updates.
    */
-  storageChangeHandler(
+  private storageChangeHandler(
     changes: {[key: string]: chrome.storage.StorageChange},
     namespace: string
   ): void {
@@ -48,22 +73,35 @@ export default class QipStorage {
 
     console.log('New settings available from sync storage:\n', changes);
 
-    this.storageChangeSourcesHook()
-      .catch((error) => {
-        console.error('Failed to apply sources update from storage sync\n', error);
-      })
-      .finally(() => {
-        chrome.runtime.sendMessage(<InternalMessage>{
-          cmd: 'settings_updated',
-        });
-      });
+    // Assume order matters and run callbacks sequentially
+    this.storageChangeCallbacks_.reduce(
+      (prev, curr, idx) => {
+        prev()
+          .then(() => {
+            return curr().catch((error) => {
+              console.error(
+                `Failed to run callback at index ${idx} after storage change detected\n`,
+                error
+              );
+            });
+          })
+          .catch((error) =>
+            console.error(
+              'Unexpected error while running callbacks after storage change detected',
+              error
+            )
+          );
+        return prev;
+      },
+      () => Promise.resolve()
+    );
   }
 
   /**
    * Enable or disable the storage change handler
    * @param state Whether storage change handler should be enabled or disabled
    */
-  toggleChangeHandler(state: boolean): void {
+  public toggleChangeHandler(state: boolean): void {
     this.changeHandlerEnabled_ = state;
   }
 
@@ -79,7 +117,7 @@ export default class QipStorage {
    * Get the values of multiple stored options
    * @param options Option names
    */
-  async getOptions(options?: string[]): Promise<{[key: string]: any}> {
+  public async getOptions(options?: string[]): Promise<{[key: string]: any}> {
     return new Promise((resolve) => {
       chrome.storage.sync.get(options || null, resolve);
     });
@@ -90,7 +128,7 @@ export default class QipStorage {
    * @param option Option name
    * @param value Option value
    */
-  async setOption(option: string, value: any): Promise<void> {
+  public async setOption(option: string, value: any): Promise<void> {
     // Computed property names (ES2015)
     return this.setOptions({[option]: value});
   }
@@ -99,23 +137,27 @@ export default class QipStorage {
    * Set the value of multiple options in storage
    * @param options Option name/value pairs
    */
-  async setOptions(options: {[key: string]: any}): Promise<void> {
+  public async setOptions(options: {[key: string]: any}): Promise<void> {
     this.toggleChangeHandler(false);
-    await new Promise((resolve) => {
-      chrome.storage.sync.set(options, () => resolve(undefined));
+    return new Promise((resolve) => {
+      chrome.storage.sync.set(options, () => {
+        this.toggleChangeHandler(true);
+        resolve(undefined);
+      });
     });
-    this.toggleChangeHandler(true);
   }
 
   /**
    * Clear options from storage
    */
-  async clearOptions(): Promise<void> {
+  public async clearOptions(): Promise<void> {
     this.toggleChangeHandler(false);
-    await new Promise((resolve) => {
-      chrome.storage.sync.clear(() => resolve(undefined));
+    return new Promise((resolve) => {
+      chrome.storage.sync.clear(() => {
+        this.toggleChangeHandler(true);
+        resolve(undefined);
+      });
     });
-    this.toggleChangeHandler(true);
   }
 }
 
